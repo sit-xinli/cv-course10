@@ -2,8 +2,18 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+#imgL = cv2.imread("data/sample-left.jpg", cv2.IMREAD_GRAYSCALE)  # left image
+#imgR = cv2.imread("data/sample-right.jpg", cv2.IMREAD_GRAYSCALE)  # right image
 imgL = cv2.imread("data/tsukuba/tsukuba_3.jpg", cv2.IMREAD_GRAYSCALE)  # left image
 imgR = cv2.imread("data/tsukuba/tsukuba_5.jpg", cv2.IMREAD_GRAYSCALE)  # right image
+
+# 画像のサイズを取得
+h, w = imgL.shape[:2]
+# 画像のサイズを揃える
+if imgR.shape[:2] != (h, w):
+    imgR = cv2.resize(imgR, (w, h))
+
 matchingNUM = 8  # Number of matches to use for fundamental matrix estimation
 
 def get_keypoints_and_descriptors(imgL, imgR):
@@ -34,7 +44,6 @@ def get_keypoints_and_descriptors(imgL, imgR):
 
 def lowes_ratio_test(matches, ratio_threshold=0.6):
     """Filter matches using the Lowe's ratio test.
-
     The ratio test checks if matches are ambiguous and should be
     removed by checking that the two distances are sufficiently
     different. If they are not, then the match at that keypoint is
@@ -85,6 +94,11 @@ def compute_fundamental_matrix(matches, kp1, kp2, method=cv2.FM_RANSAC):
 
 ############## 良いキーポイントを見つける ##############
 kp1, des1, kp2, des2, flann_match_pairs = get_keypoints_and_descriptors(imgL, imgR)
+
+if not flann_match_pairs or len(flann_match_pairs) < 2:
+    print("No matches found. Please check the images or parameters.")
+    exit()
+
 good_matches = lowes_ratio_test(flann_match_pairs, 0.2) #最近距離比で良いペアを判定
 #draw_matches(imgL, imgR, kp1, des1, kp2, des2, good_matches)
 
