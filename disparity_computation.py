@@ -70,7 +70,7 @@ def draw_matches(imgL, imgR, kp1, des1, kp2, des2, flann_match_pairs):
         flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
     )
     cv2.imshow("Matches", img)
-    cv2.imwrite("ORB_FLANN_Matches.png", img)
+    cv2.imwrite("data/ORB_FLANN_Matches.png", img)
     cv2.waitKey(0)
 
 
@@ -152,4 +152,4 @@ plt.imshow(img_output, "gray")
 plt.colorbar()
 plt.show()
 
-cv2.imwrite("disparity_SGBM.png", img_output)
+cv2.imwrite("data/disparity_SGBM.png", img_output)
