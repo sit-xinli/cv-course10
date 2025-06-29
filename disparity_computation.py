@@ -1,155 +1,182 @@
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
+import glob
+import os
+
+# --- パラメータ設定 ---
+
+# チェッカーボードの設定
+CHECKERBOARD_SIZE = (9, 6)  # チェッカーボードの内部の角の数 (横, 縦)
+SQUARE_SIZE = 25  # チェッカーボードの1マスのサイズ(mm)。相対的なスケールなので、単位は重要ではない。
+
+# 画像パス
+CALIB_IMG_DIR = 'checkerboard/'
+LEFT_IMG_PATH = 'data/IMG_8301.jpg'
+RIGHT_IMG_PATH = 'data/IMG_8302.jpg'
+OUTPUT_FILENAME = 'gimini_disparity_map.jpg'
+
+# ステレオマッチング(SGBM)のパラメータ
+# これらの値は画像によって調整が必要です
+MIN_DISPARITY = 0
+NUM_DISPARITIES = 128  # 16の倍数
+BLOCK_SIZE = 5
+P1 = 8 * 3 * BLOCK_SIZE**2
+P2 = 32 * 3 * BLOCK_SIZE**2
+DISP_12_MAX_DIFF = 1
+UNIQUENESS_RATIO = 10
+SPECKLE_WINDOW_SIZE = 100
+SPECKLE_RANGE = 32
 
 
-#imgL = cv2.imread("data/sample-left.jpg", cv2.IMREAD_GRAYSCALE)  # left image
-#imgR = cv2.imread("data/sample-right.jpg", cv2.IMREAD_GRAYSCALE)  # right image
-imgL = cv2.imread("data/tsukuba/tsukuba_3.jpg", cv2.IMREAD_GRAYSCALE)  # left image
-imgR = cv2.imread("data/tsukuba/tsukuba_5.jpg", cv2.IMREAD_GRAYSCALE)  # right image
-
-# 画像のサイズを取得
-h, w = imgL.shape[:2]
-# 画像のサイズを揃える
-if imgR.shape[:2] != (h, w):
-    imgR = cv2.resize(imgR, (w, h))
-
-matchingNUM = 8  # Number of matches to use for fundamental matrix estimation
-
-def get_keypoints_and_descriptors(imgL, imgR):
-    """ORB検出器とFLANNマッチャーを使用して、キーポイントとデクリプターを取得する、
-       ホモグラフィを計算するのに適した対応するマッチを取得する．
+def calibrate_camera(calib_img_dir):
     """
-    orb = cv2.ORB_create()
-    kp1, des1 = orb.detectAndCompute(imgL, None)
-    kp2, des2 = orb.detectAndCompute(imgR, None)
-
-    ############## Using FLANN matcher ##############
-    # Each keypoint of the first image is matched with a number of
-    # keypoints from the second image. k=2 means keep the 2 best matches
-    # for each keypoint (best matches = the ones with the smallest
-    # distance measurement).
-    FLANN_INDEX_LSH = 6
-    index_params = dict(
-        algorithm=FLANN_INDEX_LSH,
-        table_number=6,  # 12
-        key_size=12,  # 20
-        multi_probe_level=1,
-    )  # 2
-    search_params = dict(checks=50)  # or pass empty dictionary
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    flann_match_pairs = flann.knnMatch(des1, des2, k=2)
-    return kp1, des1, kp2, des2, flann_match_pairs
-
-
-def lowes_ratio_test(matches, ratio_threshold=0.6):
-    """Filter matches using the Lowe's ratio test.
-    The ratio test checks if matches are ambiguous and should be
-    removed by checking that the two distances are sufficiently
-    different. If they are not, then the match at that keypoint is
-    ignored.
-
-    https://stackoverflow.com/questions/51197091/how-does-the-lowes-ratio-test-work
+    チェッカーボード画像を使用してステレオカメラをキャリブレーションする関数
     """
-    filtered_matches = []
-    for m, n in matches:
-        if m.distance < ratio_threshold * n.distance:
-            filtered_matches.append(m)
-    return filtered_matches
+    print("キャリブレーションを開始します...")
+    
+    # チェッカーボードの3D座標を準備 (z=0)
+    objp = np.zeros((CHECKERBOARD_SIZE[0] * CHECKERBOARD_SIZE[1], 3), np.float32)
+    objp[:, :2] = np.mgrid[0:CHECKERBOARD_SIZE[0], 0:CHECKERBOARD_SIZE[1]].T.reshape(-1, 2)
+    objp = objp * SQUARE_SIZE
 
+    # 画像から検出された3D点と2D点を格納する配列
+    objpoints = []  # 3D点 (ワールド座標系)
+    imgpoints_l = []  # 2D点 (左画像)
+    imgpoints_r = []  # 2D点 (右画像)
 
-def draw_matches(imgL, imgR, kp1, des1, kp2, des2, flann_match_pairs):
-    """Draw the first 8 mathces between the left and right images."""
-    img = cv2.drawMatches(
-        imgL,
-        kp1,
-        imgR,
-        kp2,
-        flann_match_pairs[:matchingNUM],
-        None,
-        flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+    # キャリブレーション用画像を読み込む
+    left_images = sorted(glob.glob(os.path.join(calib_img_dir, 'left_*.png')))
+    right_images = sorted(glob.glob(os.path.join(calib_img_dir, 'right_*.png')))
+
+    if not left_images or not right_images or len(left_images) != len(right_images):
+        print(f"エラー: '{calib_img_dir}' に適切なキャリブレーション画像ペアが見つかりません。")
+        print("'left_xx.jpg' と 'right_xx.jpg' のような命名規則で画像を配置してください。")
+        return None
+
+    img_shape = None
+    for left_fname, right_fname in zip(left_images, right_images):
+        img_l = cv2.imread(left_fname)
+        img_r = cv2.imread(right_fname)
+        gray_l = cv2.cvtColor(img_l, cv2.COLOR_BGR2GRAY)
+        gray_r = cv2.cvtColor(img_r, cv2.COLOR_BGR2GRAY)
+
+        if img_shape is None:
+            img_shape = gray_l.shape[::-1]
+
+        # チェッカーボードの角を見つける
+        ret_l, corners_l = cv2.findChessboardCorners(gray_l, CHECKERBOARD_SIZE, None)
+        ret_r, corners_r = cv2.findChessboardCorners(gray_r, CHECKERBOARD_SIZE, None)
+
+        # 両方の画像で角が検出された場合
+        if ret_l and ret_r:
+            print(f"{os.path.basename(left_fname)} と {os.path.basename(right_fname)} で角を検出しました。")
+            objpoints.append(objp)
+            
+            # 角の精度を高める
+            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+            corners2_l = cv2.cornerSubPix(gray_l, corners_l, (11, 11), (-1, -1), criteria)
+            imgpoints_l.append(corners2_l)
+            
+            corners2_r = cv2.cornerSubPix(gray_r, corners_r, (11, 11), (-1, -1), criteria)
+            imgpoints_r.append(corners2_r)
+        else:
+            print(f"{os.path.basename(left_fname)} または {os.path.basename(right_fname)} で角を検出できませんでした。スキップします。")
+
+    if not objpoints:
+        print("エラー: 有効なチェッカーボードの角がどの画像からも検出できませんでした。")
+        return None
+
+    print(f"{len(objpoints)}ペアの有効な画像からキャリブレーションを実行します...")
+
+    # ステレオキャリブレーション
+    ret, mtx_l, dist_l, mtx_r, dist_r, R, T, E, F = cv2.stereoCalibrate(
+        objpoints, imgpoints_l, imgpoints_r, None, None, None, None, img_shape,
+        flags=cv2.CALIB_FIX_INTRINSIC
     )
-    cv2.imshow("Matches", img)
-    cv2.imwrite("data/ORB_FLANN_Matches.png", img)
-    cv2.waitKey(0)
+
+    if ret:
+        print("キャリブレーション成功！")
+        return {
+            "mtx_l": mtx_l, "dist_l": dist_l, "mtx_r": mtx_r, "dist_r": dist_r,
+            "R": R, "T": T, "img_shape": img_shape
+        }
+    else:
+        print("エラー: キャリブレーションに失敗しました。")
+        return None
 
 
-def compute_fundamental_matrix(matches, kp1, kp2, method=cv2.FM_RANSAC):
-    pts1, pts2 = [], []
-    fundamental_matrix, inliers = None, None
-    for m in matches[:matchingNUM]:
-        pts1.append(kp1[m.queryIdx].pt)
-        pts2.append(kp2[m.trainIdx].pt)
-    if pts1 and pts2:
-        # しきい値（Threshold）と信頼度（confidence）の値は、妥当な結果が得られるまで、ここで変更することができる
-        fundamental_matrix, inliers = cv2.findFundamentalMat(
-            np.float32(pts1),
-            np.float32(pts2),
-            method=method,
-            ransacReprojThreshold=3,
-            confidence=0.99,
-        )
-    return fundamental_matrix, inliers, pts1, pts2
+def compute_disparity_map(left_img_path, right_img_path, calib_data):
+    """
+    キャリブレーションデータを使用して視差マップを計算する関数
+    """
+    print("視差マップの計算を開始します...")
+    
+    img_l = cv2.imread(left_img_path)
+    img_r = cv2.imread(right_img_path)
+    
+    if img_l is None or img_r is None:
+        print(f"エラー: {left_img_path} または {right_img_path} を読み込めません。")
+        return
+
+    # 平行化（Rectification）のための変換を計算
+    R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
+        calib_data['mtx_l'], calib_data['dist_l'],
+        calib_data['mtx_r'], calib_data['dist_r'],
+        calib_data['img_shape'], calib_data['R'], calib_data['T'],
+        alpha=0  # alpha=0で歪み補正後に黒い部分がなくなるように、alpha=1で全てのピクセルが残るように
+    )
+
+    # 歪み補正と平行化のためのマップを作成
+    map_l1, map_l2 = cv2.initUndistortRectifyMap(calib_data['mtx_l'], calib_data['dist_l'], R1, P1, calib_data['img_shape'], cv2.CV_32FC1)
+    map_r1, map_r2 = cv2.initUndistortRectifyMap(calib_data['mtx_r'], calib_data['dist_r'], R2, P2, calib_data['img_shape'], cv2.CV_32FC1)
+
+    # 画像に変換を適用
+    img_l_rectified = cv2.remap(img_l, map_l1, map_l2, cv2.INTER_LINEAR)
+    img_r_rectified = cv2.remap(img_r, map_r1, map_r2, cv2.INTER_LINEAR)
+    
+    # グレースケールに変換
+    gray_l_rect = cv2.cvtColor(img_l_rectified, cv2.COLOR_BGR2GRAY)
+    gray_r_rect = cv2.cvtColor(img_r_rectified, cv2.COLOR_BGR2GRAY)
+
+    # SGBM (Semi-Global Block Matching) で視差を計算
+    stereo = cv2.StereoSGBM_create(
+        minDisparity=MIN_DISPARITY,
+        numDisparities=NUM_DISPARITIES,
+        blockSize=BLOCK_SIZE,
+        P1=P1,
+        P2=P2,
+        disp12MaxDiff=DISP_12_MAX_DIFF,
+        uniquenessRatio=UNIQUENESS_RATIO,
+        speckleWindowSize=SPECKLE_WINDOW_SIZE,
+        speckleRange=SPECKLE_RANGE,
+        mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
+    )
+    
+    print("SGBMアルゴリズムで視差を計算中...")
+    disparity = stereo.compute(gray_l_rect, gray_r_rect).astype(np.float32) / 16.0
+    
+    # 視差マップを正規化して表示・保存
+    disparity_normalized = cv2.normalize(disparity, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+    
+    print(f"計算完了！視差マップを '{OUTPUT_FILENAME}' に保存します。")
+    cv2.imwrite(OUTPUT_FILENAME, disparity_normalized)
+
+    # 結果を表示
+    cv2.imshow('Disparity Map', disparity_normalized)
+    print("表示ウィンドウで 'q' キーを押すと終了します。")
+    while True:
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    cv2.destroyAllWindows()
 
 
-############## 良いキーポイントを見つける ##############
-kp1, des1, kp2, des2, flann_match_pairs = get_keypoints_and_descriptors(imgL, imgR)
+if __name__ == '__main__':
+    # 1. カメラキャリブレーション
+    calibration_data = calibrate_camera(CALIB_IMG_DIR)
 
-if not flann_match_pairs or len(flann_match_pairs) < 2:
-    print("No matches found. Please check the images or parameters.")
-    exit()
-
-good_matches = lowes_ratio_test(flann_match_pairs, 0.2) #最近距離比で良いペアを判定
-#draw_matches(imgL, imgR, kp1, des1, kp2, des2, good_matches)
-
-
-############## 基本行列を計算する ##############
-F, _, points1, points2 = compute_fundamental_matrix(good_matches, kp1, kp2)
-
-
-############## ステレオ整列のホモグラフィ変換を計算 ##############
-h1, w1 = imgL.shape
-h2, w2 = imgR.shape
-thresh = 0
-_, H1, H2 = cv2.stereoRectifyUncalibrated(
-    np.float32(points1), np.float32(points2), np.float32(F), imgSize=(w1, h1), threshold=thresh,
-)
-
-############## 画像整列 (Rectify) ##############
-imgL_undistorted = cv2.warpPerspective(imgL, H1, (w1, h1))
-imgR_undistorted = cv2.warpPerspective(imgR, H2, (w2, h2))
-#cv2.imwrite("undistorted_L.png", imgL_undistorted)
-#cv2.imwrite("undistorted_R.png", imgR_undistorted)
-
-############## デプスマップ計算 StereoBM
-#stereo = cv2.StereoBM_create(numDisparities=16, blockSize=15)
-#disparity_BM = stereo.compute(imgL_undistorted, imgR_undistorted)
-#plt.imshow(disparity_BM, "gray")
-#plt.colorbar()
-#plt.show()
-
-# Set disparity parameters. Note: disparity range is tuned according to specific parameters obtained through trial and error.
-win_size = 2
-min_disp = -4
-max_disp = 12
-num_disp = max_disp - min_disp  # Needs to be divisible by 16
-stereo = cv2.StereoSGBM_create(
-    minDisparity=min_disp,
-    numDisparities=num_disp,
-    blockSize=5,
-    uniquenessRatio=5,
-    speckleWindowSize=5,
-    speckleRange=5,
-    disp12MaxDiff=2,
-    P1=8 * 3 * win_size ** 2,
-    P2=32 * 3 * win_size ** 2,
-)
-disparity_SGBM = stereo.compute(imgL_undistorted, imgR_undistorted)
-
-img_output = np.hstack((imgL,disparity_SGBM))
-
-plt.imshow(img_output, "gray")
-plt.colorbar()
-plt.show()
-
-cv2.imwrite("data/disparity_SGBM.png", img_output)
+    # 2. 視差マップの計算
+    if calibration_data:
+        compute_disparity_map(LEFT_IMG_PATH, RIGHT_IMG_PATH, calibration_data)
+    else:
+        print("キャリブレーションに失敗したため、視差マップの計算を中止しました。")
+        print(f"'{CALIB_IMG_DIR}' フォルダの画像を確認してください。")

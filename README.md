@@ -1,2 +1,26 @@
-# cv-course10
-epipole, fundamental matrix, essential matrix
+# コンピュータビジョンプロジェクト：ステレオビジョン
+
+## 概要
+
+このプロジェクトは、コンピュータビジョンの基本的な概念であるステレオビジョンに焦点を当てています。2つの異なる視点から撮影された画像を使用して、深度情報の抽出（視差計算）や、画像間の幾何学的な関係（基礎行列）の計算を行います。
+
+## 主な内容
+
+- **`disparity_computation.py`**:
+  - ステレオ画像ペア（例: `tsukuba`データセット）から視差マップを計算します。これにより、画像の各ピクセルの深度を推定できます。
+
+- **`FmatrixWithCalibration.ipynb`**:
+  - カメラの内部パラメータ（キャリブレーション情報）が既知の場合の基礎行列（Fundamental Matrix）の計算方法を解説するJupyter Notebookです。
+
+- **`FmatrixWithoutCalibration.ipynb`**:
+  - カメラが未キャリブレーションの場合に、対応点から基礎行列を推定する手法（8点アルゴリズムなど）を解説するJupyter Notebookです。
+
+- **`data/`**:
+  - 視差計算や基礎行列推定に使用するサンプル画像が含まれています。
+    - `tsukuba/`: 標準的なステレオベンチマーク画像セット。
+    - `sample_left.jpg`, `sample_right.jpg`: ステレオペアのサンプル。
+    - その他: 基礎行列推定用の画像ペア。
+
+## 使用方法
+
+各`.ipynb`ファイルはJupyter NotebookまたはJupyterLabで開いて実行してください。`.py`スクリプトはPython環境で実行できます。
